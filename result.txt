@@ -1,553 +1,839 @@
-# Acorn-SVD: Experimental Results on the C-CO12 Neural Recording Dataset
+# Acorn-SVD: Spectral-Geometry-Constrained Adversarial Training for Neural Representation Learning
 
-## 1. Experimental Overview
+**Technical Research Progress Report**
 
-This report presents the experimental results obtained using the **Acorn-SVD** fork of CEBRA, evaluating conventional Projected Gradient Descent (PGD) against two SVD-based adversarial training strategies.
+**Dataset:** C-CO12 Neural Recording Session  
+**Framework:** Acorn-SVD (Modified CEBRA)  
+**Experiment Date:** October 16, 2026  
+**Computational Platform:** NVIDIA H200 GPU, EPFL RunAI  
+**Experimental Scope:** 5 adversarial training methods × 3 random seeds = 15 trained encoder–decoder pipelines
 
-The primary objective was to investigate whether adversarial perturbations constrained by the dominant singular structure of neural population activity could improve behavioral decoding performance and robustness while preserving important spectral properties of the input data.
+---
 
-Three adversarial training configurations were evaluated:
+## Abstract
 
-1. **PGD (`pgd`)** — Standard L2-constrained PGD without spectral restrictions.
-2. **SVD-Gap (`svd_gap`)** — A spectrally constrained attack combining subspace projection with an adaptive perturbation budget determined by the singular-value gap.
-3. **SVD-Subspace (`svd_subspace`)** — An ablation using subspace-projected perturbations with a fixed L2 budget, without the spectral-gap-dependent budget restriction.
+This report presents an experimental investigation of spectral-geometry-constrained adversarial training for CEBRA-based neural representation learning. The proposed framework, **Acorn-SVD**, uses singular value decomposition (SVD) of neural activity windows to construct adversarial perturbations in geometrically defined subspaces. The central motivation is to investigate whether controlling perturbation directions relative to the dominant singular structure of neural population activity can improve the quality and robustness of learned neural representations.
 
-All three models were trained and evaluated successfully using the same neural recording session, random seed, encoder architecture, decoder architecture, and training configuration.
+Five training strategies were compared: conventional projected gradient descent (PGD), spectral-gap-constrained PGD (SVD-Gap), tangent-space-constrained PGD (SVD-Tangent), gap-budget-only PGD (SVD-Gap-Budget), and subspace-projected PGD without adaptive budget constraints (SVD-Subspace).
 
-**Dataset:** C-CO12  
-**Random seed:** 42  
-**Number of models:** 3  
-**Encoder training iterations:** 3,000 per model  
-**Maximum adversarial perturbation budget:** ε = 3.0  
-**GPU environment:** NVIDIA H200, RunAI
+Experiments were performed using the C-CO12 neural recording session, comprising 86 neural input features and six behavioral output variables. Each training strategy was evaluated with three random seeds (42, 43, and 44), producing 15 completed experiments. All encoders were trained for 3,000 iterations using the same architecture and optimization settings. Behavioral decoding was assessed using a two-layer MLP, with additional evaluations under adversarial attacks and simulated neural recording corruptions.
 
-## 2. Dataset and Experimental Configuration
+The main findings are:
 
-### 2.1 Dataset
+- **SVD-Subspace and SVD-Gap preserved the selected dominant singular structure to approximately numerical precision**, with maximum recorded relative singular-value errors near 1.19 × 10⁻⁷.
+- **SVD-Tangent achieved the highest average clean decoding R²**, reaching 0.6920 compared with 0.6811 for conventional PGD, although its performance varied substantially across seeds.
+- **SVD-Subspace showed a more consistent clean decoding improvement**, outperforming PGD in all three seeds and achieving mean R² = 0.6908.
+- **SVD-Tangent substantially improved robustness to simulated loss of 30% of recorded neurons**, increasing mean R² from 0.4351 (PGD) to 0.5357.
+- However, **SVD-Tangent exhibited a major loss of robustness against unrestricted PGD**, with R² decreasing to 0.2079 compared with 0.5712 for the PGD-trained baseline.
+- The additional computational cost of the spectral methods was approximately 19–21% compared with conventional PGD.
 
-The experiments used the C-CO12 session, with neural spike-count features and six behavioral target variables.
+Overall, the results provide encouraging evidence that spectral geometry can be used to construct precisely controlled adversarial perturbations and that different spectral constraints induce different forms of robustness. However, improvements in spectral preservation do not automatically imply improved robustness against unrestricted adversarial attacks.
 
-| Dataset property | Value |
+## 1. Research Objective
+
+CEBRA learns low-dimensional representations of neural population activity through contrastive learning. Such representations can be used to decode behavioral variables and study the structure of neural dynamics.
+
+A central concern is the sensitivity of these representations to changes in neural activity. Conventional adversarial training exposes a neural encoder to perturbations that maximize a training loss within a predefined norm budget. However, these perturbations are not explicitly constrained to preserve important spectral characteristics of neural population activity.
+
+The Acorn-SVD project explores an alternative: constructing adversarial perturbations using the singular geometry of the neural activity itself.
+
+The study addresses three research questions:
+
+**RQ1 — Spectral preservation:** Can adversarial perturbations be constructed that preserve the dominant singular values and singular subspaces of neural activity windows?
+
+**RQ2 — Representation quality:** Does spectral-geometry-constrained adversarial training improve downstream behavioral decoding compared with conventional PGD?
+
+**RQ3 — Robustness:** Do different spectral constraints improve resistance to adversarial attacks or realistic recording disturbances, including neural unit loss, Poisson resampling, and gain drift?
+
+An additional objective is to separate the contributions of **perturbation direction** and **adaptive perturbation magnitude** through controlled ablation experiments.
+
+## 2. Methodology
+
+### 2.1 Neural Activity Representation
+
+Each neural activity window is represented by a matrix:
+
+\[
+X \in \mathbb{R}^{N \times T},
+\]
+
+where \(N\) denotes the number of neurons and \(T\) represents the temporal window length.
+
+The temporal mean is subtracted before computing the singular value decomposition:
+
+\[
+X_c = U\Sigma V^\top.
+\]
+
+Here, \(U\) and \(V\) contain the left and right singular vectors, respectively, and \(\Sigma\) contains the singular values in descending order.
+
+A protected rank \(k\) is selected for each window based on the largest spectral gap within a predefined rank range:
+
+\[
+k=\operatorname*{argmax}_{j\in\{1,\ldots,8\}}
+(\sigma_j-\sigma_{j+1}).
+\]
+
+The corresponding spectral gap is:
+
+\[
+g_k=\sigma_k-\sigma_{k+1}.
+\]
+
+This construction makes the protected rank and spectral-gap budget adaptive to the input window.
+
+### 2.2 SVD Subspace Projection
+
+Let \(G\) denote the gradient used to construct an adversarial perturbation.
+
+The projection onto the orthogonal complement of the dominant left and right singular subspaces is:
+
+\[
+G_{\perp}
+=
+(I-U_kU_k^\top)G(I-V_kV_k^\top).
+\]
+
+This construction eliminates gradient components associated with the protected singular directions.
+
+Under the relevant spectral-gap condition, perturbations restricted to this complementary subspace preserve the selected dominant singular values and subspaces of the centered activity matrix.
+
+### 2.3 Spectral-Gap-Adaptive Perturbation Budget
+
+For the SVD-Gap method, the allowed perturbation budget for window \(i\) is:
+
+\[
+\epsilon_i
+=
+\min\left(
+\epsilon_{\max},
+\gamma(\sigma_k-\sigma_{k+1})
+\right),
+\]
+
+where:
+
+\[
+\epsilon_{\max}=3.0,\qquad \gamma=0.9.
+\]
+
+Unlike conventional PGD, where every window has the same maximum budget, this formulation restricts perturbation magnitude according to the spectral structure of each window.
+
+The purpose is to keep perturbations below a sufficient threshold for preserving the selected dominant singular structure.
+
+### 2.4 Tangent-Space Perturbations
+
+A second spectral construction uses the complementary tangent-space projection:
+
+\[
+G_T=G-G_{\perp}.
+\]
+
+This projection selects perturbation directions associated with the tangent space of the rank-\(k\) matrix manifold.
+
+For the SVD-Tangent method, the budget is:
+
+\[
+\epsilon_i
+=
+\min\left(
+3.0,
+\frac{\gamma}{2}(\sigma_k-\sigma_{k+1})
+\right).
+\]
+
+With \(\gamma=0.9\), this becomes:
+
+\[
+\epsilon_i=\min(3.0,0.45g_k).
+\]
+
+Unlike the complementary-subspace construction, tangent-space perturbations are allowed to modify the leading singular structure. The spectral-gap condition limits their magnitude to control changes in singular values and prevent closure of the selected spectral gap under the stated mathematical assumptions.
+
+It is important to distinguish a *tangent-space-constrained perturbation* from a perturbation that remains exactly on a nonlinear rank-\(k\) manifold.
+
+### 2.5 Evaluated Training Strategies
+
+Five methods were implemented and evaluated:
+
+| Method | Perturbation direction | Perturbation budget |
+|---|---|---|
+| **PGD** | Unrestricted gradient | Fixed ε = 3 |
+| **SVD-Gap** | Complement of dominant singular subspaces | min(3, 0.9 × gap) |
+| **SVD-Tangent** | Tangent space of dominant singular structure | min(3, 0.45 × gap) |
+| **SVD-Gap-Budget** | Unrestricted gradient | min(3, 0.9 × gap) |
+| **SVD-Subspace** | Complement of dominant singular subspaces | Fixed ε = 3 |
+
+The SVD-Gap-Budget and SVD-Subspace methods are ablations designed to separate the effects of the adaptive budget and subspace projection.
+
+All attacks use L2-constrained projected gradient optimization on neural input windows.
+
+## 3. Experimental Setup
+
+### 3.1 Dataset
+
+The experiment used the **C-CO12** neural recording session, containing 86 neural input features and six behavioral label columns.
+
+| Property | Value |
 |---|---|
 | Training neural data | 18,384 × 86 |
 | Validation neural data | 4,543 × 86 |
-| Training behavioral labels | 18,384 × 6 |
-| Validation behavioral labels | 4,543 × 6 |
+| Training behavioral targets | 18,384 × 6 |
+| Validation behavioral targets | 4,543 × 6 |
 | Number of neural features | 86 |
 | Number of behavioral outputs | 6 |
-| Recording session | C-CO12 |
+| Temporal encoder architecture | Offset-36 |
+| Valid evaluation windows | 4,508 |
 
-The data were loaded from:
+The six behavioral target columns were all included in decoder training and evaluation.
 
-`/data/hossein/mm_project/perich_data_valid_final_raw/C-CO12.npz`
+The current result files identify these outputs by column index but do not provide semantic names for the individual behavioral variables.
 
-The experiment used the Acorn-SVD fork located at:
+### 3.2 CEBRA Encoder Configuration
 
-`/home/mirzaei/sam/result/Aggregate/Acorn-SVD`
-
-The runtime configuration confirmed that CEBRA was imported directly from this fork rather than from another installed CEBRA package.
-
-### 2.2 CEBRA Encoder Configuration
-
-All models shared the following encoder settings:
+The same encoder architecture and optimization settings were used for all five methods.
 
 | Parameter | Value |
 |---|---|
-| Model architecture | `offset36-model-more-dropout` |
-| Latent dimension | 64 |
-| Number of hidden units | 64 |
+| Architecture | `offset36-model-more-dropout` |
+| Output latent dimension | 64 |
+| Hidden units | 64 |
 | Batch size | 2,048 |
-| Maximum iterations | 3,000 |
-| Learning rate | 0.0003 |
+| Training iterations | 3,000 |
+| Learning rate | 3 × 10⁻⁴ |
 | Temperature | 0.4 |
 | Temperature mode | Constant |
 | Time offsets | 1 |
 | Training mode | Adversarial |
-| Attack norm | L2 |
-| Maximum ε | 3.0 |
-| PGD step size α | 0.6 |
-| PGD steps | 10 |
-| Random seed | 42 |
-| SVD diagnostics interval | Every 50 iterations |
+| Perturbation norm | L2 |
+| Maximum training ε | 3.0 |
+| Attack step size | 0.6 |
+| Attack iterations | 10 |
+| Spectral parameter γ | 0.9 |
+| Protected rank range | 1–8 |
+| Temporal centering for SVD | Enabled |
+| Explicit mean preservation | Disabled |
+| Spectral diagnostic interval | Every 50 training iterations |
+| Random seeds | 42, 43, 44 |
 
-The SVD-based configurations additionally used:
+All configurations used the same maximum perturbation cap. However, spectral-gap constraints produced different *effective* budgets depending on the selected training method and individual neural window.
 
-| Spectral parameter | Value |
-|---|---|
-| Spectral gap multiplier γ | 0.9 |
-| Minimum protected rank | 1 |
-| Maximum protected rank | 8 |
-| Center input before SVD | True |
-| Preserve feature means | False |
+### 3.3 Behavioral Decoder
 
-The spectral mode was set to `none`, `gap`, or `subspace`, depending on the experimental arm.
+Following encoder training, a separate MLP was trained on the clean training embeddings generated by that encoder.
 
-### 2.3 SVD-Based Perturbation Construction
-
-For a centered neural activity window with singular value decomposition
-
-\[
-X_c=U\Sigma V^\top,
-\]
-
-the SVD-based attacks constrain the perturbation direction using projections onto the orthogonal complements of the dominant left and right singular subspaces:
-
-\[
-G_{\perp}=(I-U_kU_k^\top)G(I-V_kV_k^\top).
-\]
-
-For SVD-Gap, the permitted perturbation magnitude is also adjusted according to the singular-value gap:
-
-\[
-\epsilon_i=\min\left(3,\;0.9(\sigma_k-\sigma_{k+1})\right).
-\]
-
-This produces a window-dependent perturbation budget while restricting perturbations to directions outside the protected dominant singular subspaces.
-
-The SVD-Subspace ablation applies the subspace restriction but retains the fixed perturbation budget of ε = 3.
-
-### 2.4 Behavioral Decoder
-
-A separate two-layer multilayer perceptron (MLP) was trained on the clean training embeddings produced by each encoder.
-
-The decoder architecture was:
+Decoder architecture:
 
 `Linear(64, 64) → LayerNorm(64) → ReLU → Dropout(0.4) → Linear(64, 6)`
 
-| Decoder parameter | Value |
+| Parameter | Value |
 |---|---|
 | Hidden dimension | 64 |
-| Output dimension | 6 |
-| Dropout probability | 0.4 |
+| Output dimensions | 6 |
+| Dropout | 0.4 |
 | Optimizer | Adam |
 | Learning rate | 0.001 |
 | Training epochs | 2,500 |
-| Training loss | Mean Squared Error |
+| Objective | Mean Squared Error |
 | Evaluation metric | Mean R² across all six behavioral outputs |
 
-For each model, the decoder was trained on clean training embeddings and then evaluated on validation embeddings.
+The decoder was initialized using a controlled seed derived from the encoder seed and evaluated with dropout disabled.
 
-## 3. Main Behavioral Decoding Results
+The primary reported decoding score is the arithmetic mean of the six individual R² values.
 
-### 3.1 Overall Validation R²
+### 3.4 Experimental Runs
 
-The primary decoding metric was the average coefficient of determination (R²) across all six behavioral labels.
+The following design was used:
 
-| Training method | Validation R² (clean) | R² under PGD attack | R² under SVD-Gap attack |
-|---|---:|---:|---:|
-| **PGD** | 0.685451 | **0.563765** | 0.625275 |
-| **SVD-Gap** | **0.691389** | 0.537288 | **0.626628** |
-| **SVD-Subspace** | 0.676926 | 0.555322 | 0.626024 |
+- Five adversarial training strategies.
+- Three random seeds per strategy.
+- A total of 15 independently trained encoder–decoder pipelines.
+- 3,000 encoder iterations per pipeline.
+- 2,500 decoder epochs per pipeline.
 
-**SVD-Gap achieved the highest clean validation R²**, reaching 0.691389 compared with 0.685451 for conventional PGD.
+No non-adversarial clean CEBRA baseline was included in this experiment.
 
-The absolute improvement was:
+### 3.5 Adversarial Robustness Evaluation
 
-\[
-\Delta R^2_{\text{clean}}
-=0.691389-0.685451
-=+0.005938.
-\]
+After training, both the encoder and decoder were frozen.
 
-However, conventional PGD adversarial training achieved the highest R² under the unrestricted PGD evaluation attack.
-
-Under this attack, SVD-Gap reached 0.537288, compared with 0.563765 for the PGD-trained model:
-
-\[
-\Delta R^2_{\text{PGD attack}}
-=0.537288-0.563765
-=-0.026477.
-\]
-
-Under the SVD-Gap evaluation attack, SVD-Gap training produced the highest score, although the advantage was small:
-
-\[
-\Delta R^2_{\text{SVD-Gap attack}}
-=0.626628-0.625275
-=+0.001353.
-\]
-
-SVD-Subspace training performed below the PGD baseline on clean validation data and under the unrestricted PGD evaluation attack.
-
-These results indicate that spectral constraints can improve clean decoding in this experiment without necessarily improving robustness against unrestricted adversarial perturbations.
-
-### 3.2 Clean Validation R² by Behavioral Output
-
-The following table reports the R² values calculated from the full validation embeddings.
-
-| Behavioral output | PGD | SVD-Gap | SVD-Subspace |
-|---|---:|---:|---:|
-| Label 1 | 0.750626 | **0.755222** | 0.737437 |
-| Label 2 | **0.768707** | 0.766300 | 0.703484 |
-| Label 3 | 0.777720 | **0.784465** | 0.780735 |
-| Label 4 | 0.768967 | **0.799403** | 0.788888 |
-| Label 5 | **0.587317** | 0.584196 | 0.587239 |
-| Label 6 | 0.459369 | 0.458749 | **0.463772** |
-| **Mean R²** | 0.685451 | **0.691389** | 0.676926 |
-
-SVD-Gap achieved the highest performance on Labels 1, 3, and 4.
-
-The largest improvement occurred for Label 4, where R² increased from 0.768967 under PGD training to 0.799403 under SVD-Gap training.
-
-PGD achieved the highest score on Labels 2 and 5, while SVD-Subspace achieved the highest score on Label 6.
-
-The impact of spectral adversarial training was therefore not uniform across behavioral variables.
-
-## 4. Adversarial Robustness Evaluation
-
-### 4.1 Evaluation Protocol
-
-Robustness was evaluated using adversarial attacks against the frozen encoder–decoder pipeline.
-
-The attacks optimized the prediction Mean Squared Error using the validation targets.
-
-The evaluation settings were:
+Adversarial attacks were then generated against the combined encoder–decoder prediction pipeline using prediction MSE as the attack objective.
 
 | Parameter | Value |
 |---|---|
-| Attack norm | L2 |
-| Maximum ε | 3.0 |
-| Evaluation attack steps | 20 |
+| Evaluation norm | L2 |
+| Maximum evaluation ε | 3.0 |
+| Evaluation PGD steps | 20 |
 | Evaluation step size | 0.375 |
 | Evaluation attack batch size | 2,048 |
 | Evaluation seed | 1234 |
-| Evaluation target | Prediction MSE |
-| Evaluation mode | Frozen encoder and decoder |
+| Number of validation windows | 4,508 |
+| Attack objective | Maximize behavioral prediction MSE |
 
-Two attack types were applied:
+Three attack types were evaluated:
 
-- **Unrestricted PGD:** No spectral constraint.
-- **SVD-Gap PGD:** Subspace projection combined with the adaptive spectral-gap budget.
+1. Unrestricted PGD.
+2. SVD-Gap-constrained PGD.
+3. SVD-Tangent-constrained PGD.
 
-The evaluation used 4,508 valid neural windows after accounting for the temporal offset requirements of the encoder.
+The frozen-model evaluation also included the unperturbed validation windows.
 
-### 4.2 Clean Window-Based R²
+The measured average effective spectral attack budgets were:
 
-Before applying adversarial perturbations, predictions were evaluated on clean validation windows.
-
-| Behavioral output | PGD | SVD-Gap | SVD-Subspace |
-|---|---:|---:|---:|
-| Label 1 | 0.750451 | 0.754875 | 0.736790 |
-| Label 2 | 0.769721 | 0.766084 | 0.703024 |
-| Label 3 | 0.777637 | 0.784279 | 0.780816 |
-| Label 4 | 0.768748 | 0.799360 | 0.788696 |
-| Label 5 | 0.586149 | 0.583040 | 0.585991 |
-| Label 6 | 0.456859 | 0.456370 | 0.461219 |
-| **Mean R²** | **0.684927** | **0.690668** | **0.676089** |
-
-The clean window-based R² values closely matched the full-validation scores, supporting consistency between the window-based evaluation pathway and the standard encoder transformation.
-
-The maximum embedding mismatches recorded were:
-
-| Model | Maximum embedding mismatch |
+| Evaluation attack | Mean allowed perturbation budget |
 |---|---:|
-| PGD | 0.000200354 |
-| SVD-Gap | 0.000105420 |
-| SVD-Subspace | 0.000140678 |
+| Unrestricted PGD | Maximum ε = 3.000 |
+| SVD-Gap | 2.1063 |
+| SVD-Tangent | 1.0973 |
 
-All three values were below the runner's validation threshold of 0.001.
+These differences are essential when interpreting robustness results: scores obtained under different attack families are not directly comparable as measures of attack strength.
 
-### 4.3 R² Under Unrestricted PGD Attack
+### 3.6 Simulated Neural Recording Corruptions
 
-| Behavioral output | PGD-trained | SVD-Gap-trained | SVD-Subspace-trained |
-|---|---:|---:|---:|
-| Label 1 | 0.709179 | 0.710701 | **0.718730** |
-| Label 2 | **0.732616** | 0.714277 | 0.677212 |
-| Label 3 | **0.745789** | 0.745013 | 0.741964 |
-| Label 4 | 0.700505 | 0.710215 | **0.723586** |
-| Label 5 | **0.388610** | 0.304115 | 0.322556 |
-| Label 6 | 0.105891 | 0.039408 | **0.147886** |
-| **Mean R²** | **0.563765** | 0.537288 | 0.555322 |
+To assess robustness beyond gradient-based adversarial perturbations, the following corruptions were applied to the validation recordings:
 
-The conventional PGD-trained model provided the best mean robustness against the unrestricted PGD attack.
+| Corruption | Implementation |
+|---|---|
+| Poisson resampling | Poisson samples drawn using nonnegative neural activity values as rates |
+| 10% neuron dropout | Randomly selected neural features set to zero across the validation sequence |
+| 30% neuron dropout | Randomly selected neural features set to zero across the validation sequence |
+| Gain drift | Independent multiplicative per-neuron gain factors |
+ 
+For the 86-neuron recording, the dropout conditions correspond to approximately 9 and 26 removed units.
 
-SVD-Gap training performed slightly better on some individual outputs, but it was substantially worse on Labels 5 and 6.
-
-For Label 5, the R² decreased from 0.388610 for PGD training to 0.304115 for SVD-Gap training.
-
-For Label 6, the corresponding values were 0.105891 and 0.039408.
-
-SVD-Subspace training achieved the highest scores on Labels 1, 4, and 6, but its overall mean remained below the PGD baseline.
-
-### 4.4 R² Under SVD-Gap Attack
-
-| Behavioral output | PGD-trained | SVD-Gap-trained | SVD-Subspace-trained |
-|---|---:|---:|---:|
-| Label 1 | 0.732837 | **0.738394** | 0.731677 |
-| Label 2 | **0.754391** | 0.749481 | 0.696562 |
-| Label 3 | 0.763071 | **0.771518** | 0.766864 |
-| Label 4 | 0.738225 | 0.767413 | **0.768296** |
-| Label 5 | **0.479659** | 0.455854 | 0.469964 |
-| Label 6 | 0.283470 | 0.277110 | **0.322781** |
-| **Mean R²** | 0.625275 | **0.626628** | 0.626024 |
-
-All three models exhibited similar mean R² values under the SVD-Gap evaluation attack.
-
-The highest mean score was obtained by SVD-Gap training, although its margin over the conventional PGD baseline was only approximately 0.00135.
-
-The mean spectral-gap attack budget during evaluation was identical across all three models:
+Gain drift used multiplicative factors sampled as:
 
 \[
-\epsilon_{\text{eval, mean}}=2.106262.
+g_n=\exp(z_n),\qquad z_n\sim\mathcal N(0,0.3^2).
 \]
 
-Because this attack has a smaller effective perturbation budget than unrestricted PGD, the higher R² values under SVD-Gap attack cannot, by themselves, be interpreted as evidence of stronger adversarial robustness.
+Thus, the gain-drift test corresponds to log-normal multiplicative variation rather than a fixed ±30% change.
 
-## 5. Training-Time Attack Statistics
+Each corruption result was averaged over **five random draws** using a controlled evaluation random seed.
 
-### 5.1 Perturbation Magnitudes and Adaptive Budgets
+No retraining or decoder adaptation was performed on corrupted validation data.
 
-| Training statistic | PGD | SVD-Gap | SVD-Subspace |
-|---|---:|---:|---:|
-| Mean adversarial training loss | 6.508900 | 6.435915 | 6.478465 |
-| Mean perturbation L2 norm | 2.996329 | 2.232160 | 2.997053 |
-| Mean allowed ε | — | 2.234126 | 3.000000 |
-| Mean logged minimum ε | — | 0.738703 | 3.000000 |
-| Fraction of gap-limited windows | — | 0.802810 | 0.000000 |
-| Mean protected rank k | — | 1.438029 | 1.437928 |
-| Mean singular-value gap | — | 2.627702 | 2.628475 |
+## 4. Main Experimental Results
 
-The mean perturbation norm for conventional PGD was approximately 2.996, showing that the attack utilized nearly the entire permitted L2 budget.
+All reported values are **mean ± sample standard deviation** across the three training seeds unless otherwise specified.
 
-SVD-Subspace behaved similarly in terms of perturbation magnitude, with a mean norm of approximately 2.997.
+Higher R² indicates better decoding performance.
 
-In contrast, SVD-Gap produced a mean perturbation norm of approximately 2.232, closely matching its mean adaptive budget of 2.234.
+### 4.1 Clean Behavioral Decoding and Adversarial Robustness
 
-The fraction of gap-limited windows was:
+| Training method | Clean validation R² | Unrestricted PGD R² | SVD-Gap attack R² | SVD-Tangent attack R² |
+|---|---:|---:|---:|---:|
+| PGD | 0.6811 ± 0.0058 | **0.5712 ± 0.0130** | 0.6281 ± 0.0064 | 0.6718 ± 0.0057 |
+| SVD-Gap | 0.6846 ± 0.0112 | 0.5463 ± 0.0075 | 0.6257 ± 0.0076 | 0.6705 ± 0.0106 |
+| SVD-Tangent | **0.6920 ± 0.0188** | 0.2079 ± 0.0194 | 0.4562 ± 0.0203 | **0.6796 ± 0.0184** |
+| SVD-Gap-Budget | 0.6903 ± 0.0082 | 0.5547 ± 0.0111 | 0.6253 ± 0.0082 | 0.6791 ± 0.0085 |
+| SVD-Subspace | 0.6908 ± 0.0034 | 0.5626 ± 0.0146 | **0.6377 ± 0.0076** | 0.6772 ± 0.0039 |
+
+Three observations emerge.
+
+First, SVD-Tangent achieved the highest average clean decoding R², followed closely by SVD-Subspace and SVD-Gap-Budget.
+
+Second, conventional PGD training remained the strongest method against unrestricted PGD attacks.
+
+Third, SVD-Subspace obtained the highest R² under SVD-Gap-constrained evaluation attacks.
+
+The clean decoding improvements are encouraging, but robustness against unrestricted attacks did not improve consistently.
+
+### 4.2 Simulated Neural Corruption Results
+
+| Training method | Poisson R² | 10% dropout R² | 30% dropout R² | Gain drift R² |
+|---|---:|---:|---:|---:|
+| PGD | 0.6705 ± 0.0090 | 0.6728 ± 0.0054 | 0.4351 ± 0.0381 | 0.6783 ± 0.0069 |
+| SVD-Gap | 0.6704 ± 0.0099 | 0.6756 ± 0.0127 | 0.4393 ± 0.0220 | 0.6802 ± 0.0112 |
+| SVD-Tangent | 0.6243 ± 0.0124 | **0.6847 ± 0.0179** | **0.5357 ± 0.0194** | 0.6841 ± 0.0178 |
+| SVD-Gap-Budget | 0.6728 ± 0.0097 | 0.6801 ± 0.0092 | 0.4335 ± 0.0275 | **0.6867 ± 0.0083** |
+| SVD-Subspace | **0.6783 ± 0.0044** | 0.6782 ± 0.0042 | 0.4155 ± 0.0235 | 0.6851 ± 0.0051 |
+
+The most pronounced improvement was observed for SVD-Tangent under the 30% neuron dropout condition.
+
+However, SVD-Tangent performed substantially worse than conventional PGD under Poisson resampling.
+
+This indicates that the method does not provide uniform robustness against all forms of neural corruption.
+
+## 5. Analysis Across Random Seeds
+
+### 5.1 Clean Decoding: Seed-by-Seed Results
+
+| Training method | Seed 42 | Seed 43 | Seed 44 | Mean ± SD |
+|---|---:|---:|---:|---:|
+| PGD | 0.6745 | 0.6852 | 0.6836 | 0.6811 ± 0.0058 |
+| SVD-Gap | 0.6943 | 0.6724 | 0.6872 | 0.6846 ± 0.0112 |
+| SVD-Tangent | 0.7015 | 0.7041 | 0.6703 | 0.6920 ± 0.0188 |
+| SVD-Gap-Budget | 0.6972 | 0.6812 | 0.6925 | 0.6903 ± 0.0082 |
+| SVD-Subspace | 0.6880 | 0.6946 | 0.6899 | 0.6908 ± 0.0034 |
+
+SVD-Tangent achieved excellent clean performance for Seeds 42 and 43 but a substantially lower result for Seed 44.
+
+SVD-Subspace exhibited the lowest variation in clean R² among the five methods.
+
+Notably, SVD-Subspace improved on PGD in all three seeds.
+
+The paired clean R² differences between SVD-Subspace and PGD were:
+
+| Seed | SVD-Subspace − PGD |
+|---|---:|
+| 42 | +0.01346 |
+| 43 | +0.00937 |
+| 44 | +0.00628 |
+| **Mean difference** | **+0.00970** |
+
+This consistent direction of improvement makes SVD-Subspace a promising candidate for further decoding experiments.
+
+However, three seeds are insufficient to establish statistical significance or generalization across recording sessions.
+
+### 5.2 Robustness Under Unrestricted PGD: Seed-by-Seed Results
+
+| Training method | Seed 42 | Seed 43 | Seed 44 | Mean ± SD |
+|---|---:|---:|---:|---:|
+| PGD | 0.5699 | 0.5848 | 0.5589 | **0.5712 ± 0.0130** |
+| SVD-Gap | 0.5507 | 0.5377 | 0.5505 | 0.5463 ± 0.0075 |
+| SVD-Tangent | 0.2013 | 0.2298 | 0.1926 | 0.2079 ± 0.0194 |
+| SVD-Gap-Budget | 0.5675 | 0.5490 | 0.5476 | 0.5547 ± 0.0111 |
+| SVD-Subspace | 0.5668 | 0.5747 | 0.5464 | 0.5626 ± 0.0146 |
+
+Every spectral method obtained a lower average unrestricted-PGD robustness score than conventional PGD training.
+
+SVD-Subspace showed a relatively small average disadvantage:
 
 \[
-0.802810 \times 100 = 80.281\%.
+0.5626-0.5712=-0.0086.
 \]
 
-Thus, the spectral-gap constraint reduced the permitted perturbation magnitude in approximately **80.3% of training windows**.
-
-The average protected rank was approximately 1.44 for both SVD-based approaches, indicating that the algorithm typically selected a small number of dominant singular directions.
-
-This suggests that the method primarily preserved the leading one or two singular components rather than a high-dimensional dominant subspace.
-
-### 5.2 Spectral Preservation Diagnostics
-
-The following diagnostics were recorded during training.
-
-| Spectral diagnostic | PGD | SVD-Gap | SVD-Subspace |
-|---|---:|---:|---:|
-| Maximum singular-value error | 0.0912249 | **1.1912 × 10⁻⁷** | **1.1912 × 10⁻⁷** |
-| Maximum left-subspace error | 0.477539 | **0.000976563** | **0.000976563** |
-| Maximum right-subspace error | 0.472576 | **0.000845728** | **0.000845728** |
-| Mean spectral drift | 0.0102472 | **0.00757419** | 0.0102662 |
-| Maximum perturbation-to-gap ratio | 4.304829 | **0.900000** | 4.304830 |
-
-The most striking result is the difference in singular-value preservation.
-
-Conventional PGD produced a maximum recorded singular-value error of approximately 0.0912.
-
-Both SVD-based methods reduced this diagnostic to approximately:
+In contrast, SVD-Tangent exhibited a substantial reduction:
 
 \[
-1.19\times10^{-7}.
+0.2079-0.5712=-0.3633.
 \]
 
-This is consistent with preservation of the selected dominant singular values to numerical precision in the sampled diagnostic evaluations.
+This vulnerability appeared consistently across all three seeds.
 
-The dominant left and right singular-subspace errors were also substantially lower for the SVD-based attacks.
+The result indicates that tangent-space-constrained adversarial training did not provide sufficient robustness against perturbations outside the restricted training attack geometry.
 
-For SVD-Gap training, the maximum perturbation-to-gap ratio was approximately 0.9, consistent with the configured γ = 0.9.
+The smaller effective training budget of SVD-Tangent is also a possible contributing factor.
 
-For SVD-Subspace training, this ratio reached approximately 4.30, because no gap-dependent magnitude restriction was applied.
+### 5.3 Robustness Under 30% Neuron Dropout: Seed-by-Seed Results
 
-Importantly, SVD-Subspace still maintained very small errors in the protected singular values and subspaces.
+| Training method | Seed 42 | Seed 43 | Seed 44 | Mean ± SD |
+|---|---:|---:|---:|---:|
+| PGD | 0.4674 | 0.4448 | 0.3931 | 0.4351 ± 0.0381 |
+| SVD-Gap | 0.4638 | 0.4326 | 0.4215 | 0.4393 ± 0.0220 |
+| SVD-Tangent | **0.5537** | **0.5381** | **0.5151** | **0.5357 ± 0.0194** |
+| SVD-Gap-Budget | 0.4627 | 0.4296 | 0.4082 | 0.4335 ± 0.0275 |
+| SVD-Subspace | 0.4314 | 0.4267 | 0.3885 | 0.4155 ± 0.0235 |
 
-This suggests that the subspace projection itself is the central mechanism responsible for preserving the selected dominant singular structure, while the spectral-gap budget provides an additional restriction on perturbation magnitude.
+SVD-Tangent outperformed every other method in this condition for all three seeds.
 
-### 5.3 Spectral Drift Comparison
+The paired improvement over PGD was:
 
-The recorded mean spectral-drift values were:
+| Seed | Absolute R² improvement |
+|---|---:|
+| 42 | +0.0863 |
+| 43 | +0.0933 |
+| 44 | +0.1220 |
+| **Mean improvement** | **+0.1005** |
 
-- PGD: 0.0102472
-- SVD-Gap: 0.00757419
-- SVD-Subspace: 0.0102662
+This corresponds to an approximately **23.1% relative increase in R²** compared with the PGD baseline.
 
-Relative to PGD, the SVD-Gap method reduced the mean spectral-drift diagnostic by approximately **26.1%**.
+The reduction in performance relative to clean decoding is also informative.
 
-However, SVD-Subspace exhibited nearly the same mean spectral drift as conventional PGD.
+For conventional PGD:
 
-This indicates that preserving selected dominant singular components does not necessarily minimize the overall spectral-drift diagnostic.
+\[
+\Delta R^2 = 0.6811-0.4351=0.2460.
+\]
 
-The gap-dependent budget appears to provide additional control over the magnitude of spectral changes.
+For SVD-Tangent:
 
-These spectral-preservation findings concern the selected, centered spectral structure and the metrics recorded by the implementation. They should not be interpreted as a guarantee that every singular value, feature mean, or physiological property of the input remains unchanged.
+\[
+\Delta R^2 = 0.6920-0.5357=0.1563.
+\]
 
-## 6. Computational Performance
+Thus, SVD-Tangent lost considerably less decoding performance under severe simulated neuron removal.
 
-### 6.1 Encoder Training Time
+Importantly, this advantage was present even in Seed 44, where SVD-Tangent had lower clean R² than PGD.
 
-| Model | Encoder training time | Seconds per iteration | Total model time |
+Therefore, the neuron-dropout advantage cannot be explained solely by higher clean decoding accuracy.
+
+This is the strongest positive downstream robustness finding in the current experiment.
+
+## 6. Per-Behavioral-Output Analysis
+
+### 6.1 Clean Validation R² by Label
+
+The following values are averaged across the three seeds.
+
+| Method | Label 1 | Label 2 | Label 3 | Label 4 | Label 5 | Label 6 |
+|---|---:|---:|---:|---:|---:|---:|
+| PGD | 0.7155 | 0.7453 | **0.7841** | 0.7931 | 0.5849 | 0.4637 |
+| SVD-Gap | 0.7555 | 0.7293 | 0.7829 | 0.7823 | 0.5932 | 0.4644 |
+| SVD-Tangent | 0.7399 | **0.7695** | 0.7738 | 0.7849 | **0.6084** | **0.4753** |
+| SVD-Gap-Budget | 0.7713 | 0.7542 | 0.7785 | 0.7822 | 0.5880 | 0.4678 |
+| SVD-Subspace | **0.7840** | 0.7444 | 0.7775 | **0.7953** | 0.5819 | 0.4618 |
+
+The influence of spectral adversarial training differs substantially across behavioral targets.
+
+SVD-Subspace obtained the highest clean decoding scores on Labels 1 and 4.
+
+SVD-Tangent achieved the highest scores on Labels 2, 5, and 6.
+
+PGD remained strongest on Label 3.
+
+This heterogeneity suggests that different behavioral outputs may depend differently on the neural population structure preserved or perturbed during training.
+
+The current results do not identify the physiological interpretation of these differences because the semantic names of the six labels were not provided.
+
+### 6.2 Per-Label Vulnerability Under Unrestricted PGD
+
+The following table shows mean R² after unrestricted PGD evaluation, averaged over three seeds.
+
+| Method | Label 1 | Label 2 | Label 3 | Label 4 | Label 5 | Label 6 |
+|---|---:|---:|---:|---:|---:|---:|
+| PGD | 0.6989 | **0.7148** | **0.7537** | **0.7272** | **0.3898** | **0.1428** |
+| SVD-Gap | 0.7217 | 0.6865 | 0.7446 | 0.7094 | 0.3351 | 0.0804 |
+| SVD-Tangent | 0.5411 | 0.5360 | 0.6509 | 0.5799 | −0.1616 | −0.8988 |
+| SVD-Gap-Budget | 0.7374 | 0.6950 | 0.7416 | 0.7126 | 0.3408 | 0.1007 |
+| SVD-Subspace | **0.7522** | 0.6969 | 0.7371 | 0.7241 | 0.3502 | 0.1154 |
+
+The weakest results for SVD-Tangent were concentrated in Labels 5 and 6.
+
+The mean R² under PGD was approximately:
+
+- Label 5: −0.1616
+- Label 6: −0.8988
+
+Negative R² indicates that the predictions were worse than using a constant prediction equal to the mean of the target variable.
+
+These failures occurred across all three training seeds.
+
+Consequently, the low average adversarial robustness of SVD-Tangent is partly driven by severe degradation in specific behavioral outputs.
+
+## 7. Training-Time Perturbation Statistics
+
+### 7.1 Effective Adversarial Budgets
+
+| Method | Mean perturbation L2 norm | Mean allowed ε | Fraction gap-limited | Mean protected rank k |
+|---|---:|---:|---:|---:|
+| PGD | 2.9974 | 3.0000 | — | — |
+| SVD-Gap | 2.2322 | 2.2342 | 80.28% | 1.4381 |
+| SVD-Tangent | 1.1787 | 1.1822 | 99.93% | 1.4380 |
+| SVD-Gap-Budget | 2.2328 | 2.2344 | 80.27% | 1.4377 |
+| SVD-Subspace | 2.9970 | 3.0000 | 0.00% | 1.4378 |
+
+Conventional PGD and SVD-Subspace used almost the entire available L2 perturbation budget.
+
+SVD-Gap and SVD-Gap-Budget used nearly identical average effective budgets, around 2.234.
+
+SVD-Tangent used a substantially smaller average budget, approximately 1.182.
+
+Nearly every SVD-Tangent training window was constrained by the spectral-gap condition.
+
+The mean protected rank was approximately 1.44 for all spectral methods.
+
+This indicates that the protected spectral structure generally involved one or two dominant singular directions.
+
+### 7.2 Implications for Fair Comparison
+
+Although all methods were configured with a maximum epsilon of 3, they were not exposed to equally large perturbations during training.
+
+This distinction is particularly important for interpreting SVD-Tangent.
+
+Its poor robustness against unrestricted PGD may result from its restricted attack geometry, its smaller effective perturbation magnitude, or both.
+
+Likewise, improvements in clean decoding could potentially arise from differences in perturbation strength rather than spectral preservation alone.
+
+A necessary additional control would be conventional PGD training with smaller fixed budgets, particularly approximately:
+
+- ε = 2.23, matching the mean SVD-Gap training budget.
+- ε = 1.18, matching the mean SVD-Tangent training budget.
+
+These are useful matched-mean controls, although matching a single average epsilon does not exactly reproduce the per-window adaptive budget distribution.
+
+## 8. Spectral Preservation Results
+
+### 8.1 Spectral Diagnostics
+
+The following values summarize training-time spectral diagnostics over the three seeds.
+
+The maximum-error metrics are computed as maxima within each training run and subsequently summarized across seeds. They are not exhaustive maxima over all possible input perturbations.
+
+| Method | Relative top-k singular-value error | Left-subspace error | Right-subspace error | Mean spectral drift |
+|---|---:|---:|---:|---:|
+| PGD | 0.082917 | 0.528578 | 0.547249 | 0.010264 |
+| SVD-Gap | **1.19 × 10⁻⁷** | **0.000977** | **0.000846** | 0.007606 |
+| SVD-Tangent | 0.067624 | 0.202853 | 0.201175 | **0.003023** |
+| SVD-Gap-Budget | 0.068559 | 0.228668 | 0.225554 | 0.007626 |
+| SVD-Subspace | **1.19 × 10⁻⁷** | 0.001016 | **0.000846** | 0.010260 |
+
+The strongest spectral preservation was achieved by SVD-Gap and SVD-Subspace.
+
+Both methods reduced the maximum recorded relative change in selected leading singular values to approximately numerical precision.
+
+In contrast, the unrestricted PGD baseline showed a mean maximum recorded relative singular-value error of approximately 0.083.
+
+The SVD-Gap-Budget ablation had a comparable perturbation magnitude to SVD-Gap, but its singular-value and subspace errors were much larger.
+
+This comparison strongly supports the conclusion that **the projection direction, rather than the adaptive budget alone, is responsible for exact preservation of the selected dominant singular structure**.
+
+### 8.2 Preserving Dominant Structure Versus Reducing Overall Spectral Drift
+
+An important distinction emerged between dominant-structure preservation and overall spectral change.
+
+SVD-Subspace preserved the selected top-k structure almost exactly, despite producing approximately the same mean overall spectral drift as conventional PGD.
+
+By comparison, SVD-Tangent had the lowest overall spectral drift but did not preserve the leading singular values exactly.
+
+This distinction is expected because the two metrics measure different properties:
+
+- **Top-k singular-value and subspace errors** measure changes in the selected dominant singular structure.
+- **Spectral drift** measures relative changes across the singular spectrum used by the diagnostic.
+
+Therefore, a perturbation can strongly preserve selected dominant components while still changing the rest of the spectrum.
+
+Conversely, a small overall spectral change does not imply exact preservation of the dominant singular components.
+
+### 8.3 Perturbation Magnitude Relative to the Spectral Gap
+
+| Method | Maximum recorded ‖δ‖ / spectral gap |
+|---|---:|
+| PGD | 4.3048 |
+| SVD-Gap | 0.9000 |
+| SVD-Tangent | 0.4500 |
+| SVD-Gap-Budget | 0.9000 |
+| SVD-Subspace | 4.3048 |
+
+The recorded ratios are consistent with the implemented adaptive budgets.
+
+For SVD-Gap, the perturbation-to-gap ratio remained at or below approximately 0.9.
+
+For SVD-Tangent, it remained at or below approximately 0.45.
+
+SVD-Subspace exceeded the spectral-gap threshold in some cases while still preserving the leading singular structure to numerical precision in the sampled diagnostics.
+
+This observation illustrates that the gap budget provides a sufficient protection condition, but that the same structure may remain preserved for some perturbations exceeding that budget.
+
+### 8.4 Interpretation of the Collapse Diagnostic
+
+The experimental logs reported `collapse_fraction = 0` for all methods.
+
+However, the current diagnostic computes the post-attack gap from singular values already sorted in descending order.
+
+Since consecutive sorted singular values cannot have a negative gap, this quantity cannot reliably detect changes in the *identity* of the dominant singular directions.
+
+Therefore, the observed zero collapse fraction should **not** be interpreted as proof that no singular modes exchanged their structural roles.
+
+The singular-value errors and left/right subspace errors provide more informative evidence of structural preservation.
+
+A revised mode-crossing diagnostic would improve the reliability of future experiments.
+
+## 9. Ablation Study: Separating Geometry and Perturbation Magnitude
+
+The SVD-Gap, SVD-Gap-Budget, and SVD-Subspace configurations allow several important comparisons.
+
+### 9.1 SVD-Gap Versus SVD-Gap-Budget
+
+Both methods used nearly identical mean perturbation budgets:
+
+- SVD-Gap: ε ≈ 2.2342
+- SVD-Gap-Budget: ε ≈ 2.2344
+
+However, their spectral-preservation results differed substantially.
+
+SVD-Gap reduced the selected singular-value error to approximately 1.19 × 10⁻⁷.
+
+SVD-Gap-Budget showed an error of approximately 0.0686.
+
+This supports the effectiveness of the complementary-subspace projection in preserving dominant singular structure.
+
+Interestingly, SVD-Gap-Budget achieved a higher average clean decoding R²:
+
+- SVD-Gap: 0.6846
+- SVD-Gap-Budget: 0.6903
+
+Thus, exact dominant spectral preservation did not automatically lead to better clean decoding.
+
+### 9.2 SVD-Gap Versus SVD-Subspace
+
+Both methods used complementary-subspace projection.
+
+The main difference was perturbation magnitude:
+
+- SVD-Gap: mean ε ≈ 2.2342
+- SVD-Subspace: fixed ε = 3
+
+Both maintained the protected singular structure to numerical precision.
+
+SVD-Subspace achieved:
+
+- Higher mean clean decoding R².
+- Higher R² under SVD-Gap evaluation attacks.
+- Higher mean Poisson-corruption R².
+- Lower R² under 30% neuron dropout.
+
+This comparison indicates that a smaller spectral-gap-based budget is not universally beneficial once the complementary-subspace projection already provides strong structural preservation.
+
+### 9.3 SVD-Tangent Versus Complementary-Subspace Methods
+
+SVD-Tangent explores a different perturbation geometry.
+
+Rather than explicitly eliminating changes to the dominant singular directions, it permits structured changes in directions associated with the tangent space of the rank-\(k\) matrix manifold.
+
+Its empirical behavior was markedly different:
+
+- Higher average clean decoding R².
+- Strongly improved resistance to severe neuron dropout.
+- Much lower unrestricted-PGD robustness.
+- Lower Poisson-corruption robustness.
+- Greater changes in selected dominant singular directions.
+
+These results suggest that perturbation geometry may influence the specific forms of invariance learned by the neural encoder.
+
+However, establishing a causal relationship between tangent-space perturbations and robustness to neuron loss requires additional controls, particularly matched-budget PGD training and evaluation across more recording sessions.
+
+## 10. Computational Efficiency
+
+Training was performed using a single NVIDIA H200 GPU under EPFL RunAI.
+
+The RunAI configuration allocated:
+
+| Resource | Allocation |
+|---|---|
+| GPU | 1 × NVIDIA H200 |
+| CPUs | 64 |
+| Memory | 256 GiB |
+| Shared memory | Large SHM enabled |
+| Execution environment | Acorn-SVD fork with Python virtual environment |
+
+### 10.1 Encoder Runtime
+
+| Training method | Seconds per iteration (mean ± SD) | Approximate encoder time | Overhead versus PGD |
 |---|---:|---:|---:|
-| PGD | 601.407 s | 0.200469 | 604.043 s |
-| SVD-Gap | 691.214 s | 0.230405 | 693.463 s |
-| SVD-Subspace | 694.461 s | 0.231487 | 696.741 s |
+| PGD | 0.1901 ± 0.0012 | 9.51 min | Baseline |
+| SVD-Gap | 0.2295 ± 0.0007 | 11.47 min | +20.7% |
+| SVD-Tangent | 0.2300 ± 0.0012 | 11.50 min | +21.0% |
+| SVD-Gap-Budget | 0.2263 ± 0.0014 | 11.32 min | +19.0% |
+| SVD-Subspace | 0.2283 ± 0.0010 | 11.42 min | +20.1% |
 
-Expressed in minutes:
+The measured computational overhead of the spectral methods was approximately 19–21%.
 
-- **PGD:** 10.02 minutes of encoder training.
-- **SVD-Gap:** 11.52 minutes of encoder training.
-- **SVD-Subspace:** 11.57 minutes of encoder training.
+The total recorded execution time for all 15 completed encoder–decoder experiments and their evaluations was approximately **166.3 minutes (2 hours and 46 minutes)**, excluding any external scheduling delays.
 
-SVD-Gap required approximately **14.9% more encoder training time** than conventional PGD.
+The moderate overhead suggests that spectral-geometry-constrained adversarial training is computationally practical in the current implementation.
 
-SVD-Subspace required approximately **15.5% more time** than conventional PGD.
+## 11. Discussion
 
-Despite the additional SVD computations, the computational overhead remained moderate.
+### 11.1 Main Scientific Finding: Dominant Spectral Structure Can Be Preserved During Attack Generation
 
-All three models completed their 3,000 encoder iterations successfully.
+The clearest result of this experiment is the accurate preservation of the selected dominant singular values and subspaces under complementary-subspace-constrained attacks.
 
-The final SVD-Subspace progress log showed:
+SVD-Gap and SVD-Subspace both achieved relative top-k singular-value errors near 10⁻⁷.
 
-`3000/3000 iterations | 11:34 elapsed | 4.32 iterations/s`
+The gap-budget-only ablation did not achieve comparable preservation, despite using a similar average perturbation magnitude.
 
-### 6.2 Decoder and Evaluation Time
+This supports the central mathematical and algorithmic contribution of restricting adversarial perturbations to carefully selected spectral directions.
 
-| Runtime metric | PGD | SVD-Gap | SVD-Subspace |
-|---|---:|---:|---:|
-| Decoder training time | 1.9247 s | 1.7336 s | 1.7539 s |
-| Adversarial evaluation time | 0.6513 s | 0.5024 s | 0.5137 s |
+### 11.2 Improvement in Clean Decoding Is Promising but Modest
 
-The decoder training and adversarial evaluation stages contributed relatively little to the total runtime.
+All four spectral methods achieved a higher *mean* clean decoding R² than conventional PGD.
 
-Most computational cost came from encoder training.
+The improvements ranged from approximately +0.0035 for SVD-Gap to +0.0109 for SVD-Tangent.
 
-### 6.3 Detailed Decoder Training Trace for SVD-Subspace
+SVD-Subspace showed a particularly consistent advantage across all three seeds, with a mean improvement of +0.0097 R².
 
-The provided training log included the following decoder loss measurements for the SVD-Subspace model.
+Nevertheless, only three seeds and one recording session were evaluated.
 
-| Decoder epoch | Training MSE | Elapsed time |
-|---|---:|---:|
-| 250 | 1585.123657 | 0.2 s |
-| 500 | 1176.012329 | 0.3 s |
-| 750 | 827.035828 | 0.5 s |
-| 1000 | 612.845093 | 0.7 s |
-| 1250 | 507.445923 | 0.9 s |
-| 1500 | 450.601410 | 1.1 s |
-| 1750 | 410.902100 | 1.2 s |
-| 2000 | 396.007111 | 1.4 s |
-| 2250 | 387.140717 | 1.6 s |
-| 2500 | 375.273376 | 1.7 s |
+The differences should therefore be interpreted as preliminary descriptive evidence rather than statistically established performance gains.
 
-The decoder training MSE decreased consistently across the 2,500 epochs, finishing at approximately 375.27.
+### 11.3 Robustness Is Strongly Dependent on the Perturbation Type
 
-These MSE values are in the original scale of the behavioral targets and should not be directly compared with R² without considering the target variances.
+The results do not support a general claim that spectral adversarial training improves robustness against arbitrary attacks.
 
-## 7. Result Reproducibility and Saved Outputs
+Conventional PGD training remained strongest under unrestricted PGD evaluation.
 
-The experiment was completed successfully for all three requested arms.
+However, SVD-Tangent achieved a substantial improvement in simulated severe neural unit loss.
 
-The execution log confirmed:
+This suggests that **robustness to adversarial perturbations and robustness to recording degradation are distinct properties**.
 
-`[SAVED] 3/3 results`
+A model trained with one restricted adversarial geometry may develop invariances that benefit a particular type of recording disturbance without improving resistance to unrelated adversarial directions.
 
-The results directory was:
+This trade-off warrants further investigation.
 
-`/home/mirzaei/sam/result/Aggregate/ACORN_SVD_RESULTS/C-CO12_20261015_214434_muawv24p/`
+### 11.4 The SVD-Tangent Result Suggests a Research Direction
 
-The completed experiment generated the main result files:
+SVD-Tangent increased mean R² under 30% neuron dropout by approximately +0.1005 compared with PGD, consistently across all three seeds.
 
-- `results.json` — Complete results for all evaluated models, including per-label R², adversarial robustness, runtime statistics, and spectral diagnostics.
-- `results.csv` — Tabular result summary.
-- `summary.json` — Aggregate performance statistics across seeds.
-- `run_config.json` — Experimental settings, model configurations, attack settings, dataset dimensions, and paths.
+This effect was considerably larger than the observed clean decoding improvements.
 
-Results were also saved progressively during execution before the final files were produced.
+A possible interpretation is that tangent-space-constrained adversarial training changes how distributed neural information is represented, making the decoder less sensitive to the loss of a subset of neural units.
 
-The reported standard deviations in `summary.json` were 0.0 because only one random seed was evaluated. These zero values do not indicate that the results are stable across random initializations.
+However, this remains a hypothesis.
 
-No encoder or decoder checkpoints were stored by this runner.
+The current experiments do not directly measure representational redundancy, neuron-level attribution, or manifold stability after neuron loss.
 
-## 8. Interpretation and Discussion
+These measurements would be necessary to support a mechanistic interpretation.
 
-The experiments reveal three important findings.
+### 11.5 Spectral Preservation Does Not Guarantee Better Downstream Performance
 
-### 8.1 Spectral Preservation Was Successfully Demonstrated
+An important negative result is that exact preservation of selected singular components did not consistently produce superior decoding or robustness.
 
-The strongest result is the substantial reduction in dominant singular-value and subspace errors under both SVD-based attacks.
+For example, SVD-Gap preserved the dominant singular structure more accurately than SVD-Gap-Budget, but the latter achieved higher mean clean decoding R².
 
-The maximum singular-value error fell from approximately 0.0912 for conventional PGD to approximately \(1.19\times10^{-7}\) for both SVD-Gap and SVD-Subspace.
+Similarly, SVD-Subspace maintained exact spectral preservation but performed worse than PGD under severe neuron dropout.
 
-This supports the effectiveness of the proposed subspace-projection mechanism for preserving selected dominant spectral components of the neural input windows.
+These findings indicate that the mathematical property of spectral preservation and the downstream utility of an adversarial training strategy must be evaluated independently.
 
-The SVD-Subspace ablation is particularly informative because it achieved nearly identical preservation diagnostics without enforcing the spectral-gap-dependent perturbation budget.
+## 12. Limitations and Next Experiments
 
-Consequently, the current results suggest that subspace projection is primarily responsible for the preservation of the selected dominant singular structure.
+Several limitations should be addressed before drawing stronger scientific conclusions.
 
-### 8.2 Spectral-Gap Constraints Alter Attack Strength
+**Limited number of recording sessions.** The experiment used only C-CO12. Additional sessions are necessary to assess generalization.
 
-The SVD-Gap method imposed a smaller effective perturbation budget for approximately 80.3% of training windows.
+**Small number of random seeds.** Three seeds provide an initial estimate of variability but are insufficient for strong statistical claims.
 
-Its mean allowed ε was 2.234, compared with the fixed ε = 3 used by conventional PGD and SVD-Subspace.
+**Missing non-adversarial CEBRA baseline.** A clean-trained encoder should be evaluated to distinguish improvements over ordinary CEBRA from improvements over PGD adversarial training.
 
-This difference must be considered when interpreting downstream performance.
+**Different effective perturbation budgets.** The SVD-based methods use different effective budgets despite sharing the same maximum epsilon. Matched-budget PGD controls are required.
 
-Improved clean decoding under SVD-Gap training may be associated with the direction of the adversarial perturbations, their smaller magnitude, or a combination of both.
+**Restricted robustness evaluation.** Robustness was measured using a specified 20-step PGD protocol and two constrained attack variants. Additional attack configurations would improve the evaluation.
 
-The current three-arm experiment does not completely isolate these effects.
+**Simplified recording corruptions.** The neuron-dropout experiment simulates loss of units by setting selected channels to zero. It does not directly evaluate longitudinal electrode drift or empirically observed neuron disappearance.
 
-An additional **SVD-Gap-Budget ablation**, which applies the gap-dependent budget without subspace projection, would help determine the separate contribution of adaptive perturbation magnitude.
+**Input validity.** Perturbations are generated in a continuous numerical space, and the present evaluation does not establish that all adversarial samples remain valid integer, nonnegative neural spike counts.
 
-### 8.3 Clean Decoding Improved, but General Robustness Did Not
+**Spectral metric limitations.** The current collapse diagnostic does not reliably detect all dominant-mode exchanges and should be revised.
 
-SVD-Gap training achieved the highest clean validation R² of 0.691389, compared with 0.685451 for PGD and 0.676926 for SVD-Subspace.
+**Reproducibility across runs.** A previous single-seed pilot produced somewhat different R² values from the current experiment for some shared configurations. The present 15-run experiment is treated as the primary result set, but bitwise reproducibility across environments has not been established.
 
-However, SVD-Gap training did not improve robustness against unrestricted PGD.
+### Recommended Follow-Up Experiments
 
-In fact, the SVD-Gap-trained model achieved a lower R² under PGD attack than the conventional PGD-trained model.
+The immediate priorities are:
 
-This indicates a distinction between **spectral preservation during adversarial training** and **general adversarial robustness after training**.
+1. **Matched-budget PGD controls:** Repeat conventional PGD training using ε ≈ 2.23 and ε ≈ 1.18 to evaluate the contribution of effective perturbation strength.
+2. **Clean CEBRA baseline:** Train and evaluate the same encoder and decoder without adversarial perturbations.
+3. **Additional neural sessions:** Repeat the comparison across multiple recordings or animals.
+4. **Further robustness testing:** Evaluate larger neuron-loss fractions, structured or behaviorally selective unit loss, and multiple corruption severities.
+5. **Improved spectral diagnostics:** Directly track dominant singular-subspace identity and spectral mode exchanges.
+6. **Mechanistic analysis:** Investigate whether tangent-space training increases redundancy or changes the distribution of behavioral information across neural features.
+7. **Extended statistical evaluation:** Use more independent training seeds and appropriate paired comparisons across sessions.
 
-A method can successfully preserve the dominant spectral structure of its training perturbations without necessarily producing an encoder that is more robust to unconstrained adversarial attacks.
+## 13. Conclusion
 
-The results under SVD-Gap evaluation were very similar across the three models, with all mean R² scores near 0.626.
+This study evaluated five adversarial training strategies for CEBRA-based neural representation learning using 15 completed experiments on the C-CO12 dataset.
 
-Therefore, the present evidence supports spectral preservation more strongly than improvements in adversarial robustness.
+The experimental results support three main conclusions.
 
-## 9. Limitations
+**First, spectral geometry provides an effective mechanism for controlling adversarial perturbations.** Complementary-subspace-constrained attacks preserved the selected dominant singular structure to approximately numerical precision, with modest additional computational cost.
 
-The present experiment has several limitations relevant to scientific interpretation.
+**Second, spectral adversarial training can modestly improve clean behavioral decoding.** SVD-Tangent achieved the highest average R², while SVD-Subspace provided the most consistent improvement over conventional PGD across the three seeds.
 
-**Single random seed.** All experiments used Seed 42. Additional seeds are required to estimate variability and determine whether the relatively small clean R² improvements are reproducible.
+**Third, the type of adversarial geometry strongly influences the type of robustness obtained.** SVD-Tangent substantially improved resistance to the simulated loss of 30% of recorded neurons, but this benefit was accompanied by severe vulnerability to unrestricted PGD attacks.
 
-**Single recording session.** Only C-CO12 was evaluated. Generalization to other neural recording sessions remains untested.
+These findings suggest that spectral constraints should not be viewed simply as a mechanism for increasing adversarial robustness. Rather, they define different perturbation geometries that can influence representation quality, spectral preservation, and sensitivity to distinct forms of recording degradation.
 
-**Unequal effective attack budgets.** Although the maximum ε was 3 in all methods, the SVD-Gap training attack had a lower mean effective budget.
+The strongest current results are the precise preservation of selected singular components and the consistent improvement of SVD-Tangent under severe simulated neuron dropout.
 
-**Incomplete ablation coverage.** The gap-budget-only ablation was not included in the reported run, making it difficult to isolate the effects of subspace projection and adaptive budget control.
-
-**Restricted spectral preservation objective.** The SVD-based methods target selected dominant singular components, not necessarily the entire singular spectrum.
-
-**Input-domain interpretation.** The recorded configuration used centered spectral computations without explicit mean preservation. The present report does not establish that all generated perturbations correspond to physically valid integer, nonnegative spike-count modifications.
-
-**Robustness evaluation scope.** The reported attacks provide an informative comparison under the specified 20-step evaluation protocol, but they do not establish worst-case robustness across all possible attacks.
-
-## 10. Conclusion
-
-The Acorn-SVD experiments successfully evaluated conventional PGD, SVD-Gap, and SVD-Subspace adversarial training on the C-CO12 neural recording session.
-
-The main findings are:
-
-1. **SVD-Gap produced the highest clean behavioral decoding performance**, reaching a mean validation R² of **0.691389**, compared with **0.685451** for PGD.
-
-2. **Both SVD-based methods strongly preserved the selected dominant singular structure**, reducing the maximum recorded singular-value error to approximately **1.19 × 10⁻⁷**.
-
-3. **SVD-Gap reduced the mean effective perturbation budget to approximately 2.234**, with the spectral-gap constraint active for **80.3%** of training windows.
-
-4. **Conventional PGD remained the strongest model against unrestricted PGD evaluation**, achieving R² = **0.563765**, compared with **0.537288** for SVD-Gap.
-
-5. **Performance under SVD-Gap evaluation was nearly identical across the three models**, with mean R² values between **0.625275** and **0.626628**.
-
-6. **The additional computational overhead was moderate**, with SVD-Gap requiring approximately **11.52 minutes** of encoder training versus **10.02 minutes** for PGD.
-
-Overall, these findings provide strong preliminary empirical support for the **spectral-preservation properties of SVD-constrained adversarial perturbations**.
-
-They also demonstrate that preserving dominant singular structures does not automatically translate into stronger robustness against unrestricted PGD attacks.
-
-The most promising result is the combination of highly accurate spectral preservation and a modest improvement in clean behavioral decoding under SVD-Gap training.
-
-Further experiments with multiple seeds, additional neural sessions, and the gap-budget-only ablation are needed to establish whether these effects are reproducible and to identify the distinct contributions of spectral projection and adaptive perturbation budgets.
+Further matched-budget experiments and replication across additional neural recordings are needed to determine whether these observations represent generalizable properties of spectral-geometry-constrained neural representation learning.
